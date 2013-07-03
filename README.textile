@@ -14,6 +14,8 @@ The plug-in performs the following steps:
 8. Add the project.clj to the SCM system
 9. Commit the project.clj to the SCM system
 
+Optionally, the plug-in will also write out a namespace that contains @group-id@, @artifact-id@, and @version@ vars, mirroring each change to project.clj.
+
 h1. Usage
 
 pre.    lein plugin install lein-release/lein-release 1.0.0
@@ -41,6 +43,17 @@ This can be used to explicitly specify the deployment strategy that will be used
 * @:lein-install@
 
 The release plugin attempts to detect whether to use @:lein-deploy@ or @:lein-install@ by inspecting the project.clj.  If a @:repositories@ key is present in the project.clj @:lein-deploy@ will be used.  Otherwise @:lein-install@ will be used.  @:clojars@ will only be used if it is explicitly specified in the project.clj.
+
+h3. @:coords-ns@, @:coords-ns-base@
+
+pre. @:lein-release {:coords-ns org.clojars.relaynetwork.clj-avro.coords}@
+
+If provided, the specified namespace will be written to a source directory with @group-id@, @artifact-id@, and @version@ vars containing the appropriate strings.
+
+The plug-in will attempt to guess the correct source directory, but conservatively. If @src@ is in the project's @:source-paths@ list (or @:source-path@ for lein v1), or if there is only one path configured, then it will be used; otherwise a source path must be specified explicitly:
+
+pre. @:lein-release {:coords-ns org.clojars.relaynetwork.clj-avro.coords
+                     :coords-ns-base "src/main/clojure"}@
 
 h2. Example Configuration
 

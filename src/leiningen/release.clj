@@ -1,5 +1,6 @@
 (ns leiningen.release
   (:require
+   [clojure.java.io    :as io]
    [clojure.java.shell :as sh]
    [clojure.string     :as string])
   (:import
@@ -130,7 +131,26 @@
       (raise "Error: unable to find version string %s in project.clj file!" old-vstring))
     (.replaceFirst matcher (format "%s\"%s\"" (.group matcher 1) new-vstring))))
 
-(defn set-project-version! [old-vstring new-vstring]
+(defn print-coords-ns
+  "Print coords namespace to *out*. `ns` is a string or symbol."
+  [project ns version]
+  (prn (list 'ns ns "Maven coordinates file produced by lein-release plug-in"
+             (list :refer-clojure :exclude ['name])))
+  (newline)
+  (prn (list 'def 'group-id "Group name" (:group project)))
+  (prn (list 'def 'artifact-id "Artifact name" (:name project)))
+  (prn (list 'def 'version "Version string" version)))
+
+(defn write-coords-file
+  [project {:keys [ns path] :as coords-file-cnf} new-vstring]
+  (.mkdirs (.getParentFile (java.io.File. path)))
+  (with-open [w (io/writer path)]
+    (binding [*out* w]
+      (print-coords-ns project ns new-vstring))))
+
+(defn set-project-version! [project coords-file-cnf old-vstring new-vstring]
+  (when coords-file-cnf
+    (write-coords-file project coords-file-cnf new-vstring))
   (spit "project.clj" (replace-project-version old-vstring new-vstring)))
 
 (defn detect-deployment-strategy [project]
@@ -182,18 +202,49 @@
 
 )
 
+(defn guess-src-dir
+  "Guess the primary Clojure source directory of the project, or nil if ambiguous."
+  [project]
+  (let [default (.getAbsolutePath (java.io.File. "src"))
+        ;; Project already contains absolute paths, so just find all registered
+        ;; source paths (for both lein 1 & 2).
+        candidates (remove nil? (cons (:source-path project) (:source-paths project)))]
+    (cond
+     (= 1 (count candidates)) (first candidates)
+     (.contains candidates default) default
+     :else nil)))
+
+(defn make-namespace-path
+  [base ns]
+  (str (io/file base (string/replace (namespace-munge ns) "." java.io.File/separator)) ".clj"))
+
+(defn compute-coords-file-cnf
+  "Compute the configuration for the coordinates file, or nil if not requested.
+Result is a map of :ns (symbol) and :path (string)."
+  [project]
+  (when-let [dest-ns (:coords-ns config)]
+    (if-let [dest-base (if-let [spec-base (:coords-ns-base config)]
+                         (str (io/file (:root project) spec-base))
+                         (guess-src-dir project))]
+      {:ns dest-ns :path (make-namespace-path dest-base dest-ns)}
+      (raise "Error: Could not determine source path for coords ns; please set :coords-ns-base"))))
+
 (defn release [project & args]
   (binding [config (or (:lein-release project) config)]
     (let [current-version  (get project :version)
           release-version  (compute-release-version current-version)
           next-dev-version (compute-next-development-version (.replaceAll current-version "-SNAPSHOT" ""))
+          coords-file-cnf (compute-coords-file-cnf project)
           target-dir       (:target-path project (:target-dir project (:jar-dir project "."))) ; target-path for lein2, target-dir or jar-dir for lein1
           jar-file-name    (format "%s/%s-%s.jar" target-dir (:name project) release-version)]
       (when (is-snapshot? current-version)
         (println (format "setting project version %s => %s" current-version release-version))
-        (set-project-version! current-version release-version)
-        (println "adding, committing and tagging project.clj")
+        (set-project-version! project coords-file-cnf current-version release-version)
+        (println "adding, committing and tagging project.clj"
+                 (when coords-file-cnf "and coordinates file"))
         (scm! :add "project.clj")
+        (when coords-file-cnf
+          (scm! :add (:path coords-file-cnf)))
         (scm! :commit "-m" (format "lein-release plugin: preparing %s release" release-version))
         (scm! :tag (format "%s-%s" (:name project) release-version)))
       (when-not (.exists (java.io.File. jar-file-name))
@@ -203,7 +254,9 @@
       (perform-deploy! project jar-file-name)
       (when-not (is-snapshot? (extract-project-version-from-file))
         (println (format "updating version %s => %s for next dev cycle" release-version next-dev-version))
-        (set-project-version! release-version next-dev-version)
+        (set-project-version! project coords-file-cnf release-version next-dev-version)
         (scm! :add "project.clj")
+        (when coords-file-cnf
+          (scm! :add (:path coords-file-cnf)))
         (scm! :commit "-m" (format "lein-release plugin: bumped version from %s to %s for next development cycle" release-version next-dev-version))))))
 
